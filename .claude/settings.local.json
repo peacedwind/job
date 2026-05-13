@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest tests/test_storage.py -v)",
+      "Bash(python -m pytest tests/test_parser.py -v)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(python -m pytest tests/test_filter.py -v)"
+    ]
+  }
+}
