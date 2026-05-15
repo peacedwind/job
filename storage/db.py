@@ -106,30 +106,7 @@ class Database:
         conn.commit()
         conn.close()
 
-    def migrate_notified_positions(self, receiver_email: str):
-        """Migrate old notified_at records to position_notifications table."""
-        conn = self._get_conn()
-        # Check if notified_at column exists
-        cursor = conn.execute("PRAGMA table_info(positions)")
-        columns = {row[1] for row in cursor.fetchall()}
-        if "notified_at" not in columns:
-            conn.close()
-            return
-        # Move notified positions to new table
-        cursor = conn.execute(
-            "SELECT id, notified_at FROM positions WHERE notified_at IS NOT NULL"
-        )
-        rows = cursor.fetchall()
-        if rows:
-            conn.executemany(
-                """INSERT OR IGNORE INTO position_notifications
-                   (position_id, receiver_email, notified_at)
-                   VALUES (?, ?, ?)""",
-                [(row[0], receiver_email, row[1]) for row in rows],
-            )
-            conn.commit()
-            print(f"  迁移 {len(rows)} 条旧通知记录到 position_notifications")
-        conn.close()
+    
 
     def insert_position(self, position: dict) -> bool:
         """Insert a position. Returns True if inserted, False if duplicate."""

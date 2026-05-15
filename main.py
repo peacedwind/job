@@ -31,7 +31,6 @@ async def run():
     print("=" * 50)
 
     db = Database(config.DB_PATH)
-    db.migrate_notified_positions(config.RECEIVER_EMAIL)
     today = date.today()
 
     if not config.DEEPSEEK_API_KEY:
