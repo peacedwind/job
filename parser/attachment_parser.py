@@ -76,6 +76,43 @@ def get_file_type(url: str, content: bytes) -> str:
     return "unknown"
 
 
+# 附件相关性关键词（文件名或上下文包含以下词才下载）
+ATTACHMENT_KEYWORDS = [
+    "岗位", "招聘", "招录", "职位", "计划表", "人员需求",
+    "录用", "聘用", "用人", "公招", "选调", "遴选",
+    "岗位表", "职位表", "需求表", "名额",
+]
+
+# 排除关键词（这些附件通常不是岗位表）
+ATTACHMENT_EXCLUDE = [
+    "报名", "须知", "承诺书", "诚信", "协议", "合同",
+    "体检", "政审", "考察", "公示", "通知", "公告",
+    "指南", "样表", "模板", "填写说明",
+]
+
+
+def should_download(url: str, context: str = "") -> bool:
+    """Decide whether an attachment is worth downloading.
+    Checks filename and surrounding context for position-related keywords.
+    """
+    from urllib.parse import unquote
+    filename = unquote(url.split("/")[-1].split("?")[0]).lower()
+    context_lower = context.lower()
+
+    # Check exclude keywords first
+    for kw in ATTACHMENT_EXCLUDE:
+        if kw in filename or kw in context_lower:
+            return False
+
+    # Check positive keywords
+    for kw in ATTACHMENT_KEYWORDS:
+        if kw in filename or kw in context_lower:
+            return True
+
+    # No keywords matched - skip
+    return False
+
+
 async def process_attachment(url: str) -> str:
     """Download and extract text from an attachment.
     Returns extracted text or empty string.

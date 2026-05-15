@@ -101,10 +101,11 @@ def analyze_detail_page(client: OpenAI, html: str, url: str,
   "has_establishment": true,
   "city": "深圳",
   "attachments": [
-    {"url": "https://...xxx.pdf", "type": "pdf"},
-    {"url": "https://...xxx.xlsx", "type": "xlsx"}
+    {"url": "https://...xxx.pdf", "type": "pdf", "context": "附件：2026年岗位需求表"},
+    {"url": "https://...xxx.xlsx", "type": "xlsx", "context": "岗位一览表"}
   ]
 }
+注意：context字段填写附件链接旁边的说明文字或附件名称，用于判断是否值得下载。
 
 情况3 - 需要跳转到其他页面：
 {

@@ -10,7 +10,7 @@ from parser.llm_parser import (
     analyze_detail_page,
     parse_attachment_text,
 )
-from parser.attachment_parser import process_attachment
+from parser.attachment_parser import process_attachment, should_download
 from filter.matcher import filter_positions, compute_position_hash
 from storage.db import Database
 from notifier.email_sender import (
@@ -101,6 +101,10 @@ async def run():
                     for att in attachments:
                         att_url = att.get("url", "")
                         att_type = att.get("type", "unknown")
+                        att_context = att.get("context", "")
+                        if not should_download(att_url, att_context):
+                            print(f"    跳过附件(不相关): {att_url.split('/')[-1][:40]}")
+                            continue
                         print(f"    下载附件: {att_type} {att_url[:60]}...")
                         text = await process_attachment(att_url)
                         if text:
@@ -136,6 +140,10 @@ async def run():
                             elif link_action == "download":
                                 for att in link_decision.get("attachments", []):
                                     att_url = att.get("url", "")
+                                    att_context = att.get("context", "")
+                                    if not should_download(att_url, att_context):
+                                        print(f"    跳过附件(不相关): {att_url.split('/')[-1][:40]}")
+                                        continue
                                     print(f"    下载链接页附件: {att_url[:60]}...")
                                     text = await process_attachment(att_url)
                                     if text:
