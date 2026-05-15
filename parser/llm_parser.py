@@ -33,7 +33,7 @@ def parse_list_page(client: OpenAI, html: str, model: str = "deepseek-chat") -> 
                 {"role": "user", "content": f"{prompt}\n\nHTML内容:\n{html[:15000]}"},
             ],
             temperature=0,
-            max_tokens=4000,
+            max_tokens=8192,
         )
         content = response.choices[0].message.content.strip()
         return _extract_json(content)

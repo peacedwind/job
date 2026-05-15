@@ -71,6 +71,15 @@ class Database:
                 last_success_time TEXT
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS position_notifications (
+                position_id INTEGER NOT NULL,
+                receiver_email TEXT NOT NULL,
+                notified_at TEXT,
+                PRIMARY KEY (position_id, receiver_email),
+                FOREIGN KEY (position_id) REFERENCES positions(id)
+            )
+        """)
         conn.commit()
         conn.close()
         self._migrate()
@@ -95,6 +104,31 @@ class Database:
             if col not in existing:
                 conn.execute(f"ALTER TABLE positions ADD COLUMN {col} {typ}")
         conn.commit()
+        conn.close()
+
+    def migrate_notified_positions(self, receiver_email: str):
+        """Migrate old notified_at records to position_notifications table."""
+        conn = self._get_conn()
+        # Check if notified_at column exists
+        cursor = conn.execute("PRAGMA table_info(positions)")
+        columns = {row[1] for row in cursor.fetchall()}
+        if "notified_at" not in columns:
+            conn.close()
+            return
+        # Move notified positions to new table
+        cursor = conn.execute(
+            "SELECT id, notified_at FROM positions WHERE notified_at IS NOT NULL"
+        )
+        rows = cursor.fetchall()
+        if rows:
+            conn.executemany(
+                """INSERT OR IGNORE INTO position_notifications
+                   (position_id, receiver_email, notified_at)
+                   VALUES (?, ?, ?)""",
+                [(row[0], receiver_email, row[1]) for row in rows],
+            )
+            conn.commit()
+            print(f"  迁移 {len(rows)} 条旧通知记录到 position_notifications")
         conn.close()
 
     def insert_position(self, position: dict) -> bool:
@@ -183,26 +217,33 @@ class Database:
         conn.commit()
         conn.close()
 
-    def get_unnotified_positions(self) -> list[dict]:
-        """Get all positions that haven't been notified yet."""
+    def get_unnotified_positions(self, receiver_email: str) -> list[dict]:
+        """Get positions that haven't been notified to this receiver."""
         conn = self._get_conn()
         conn.row_factory = sqlite3.Row
         cursor = conn.execute(
-            "SELECT * FROM positions WHERE notified_at IS NULL"
+            """SELECT p.* FROM positions p
+               WHERE p.id NOT IN (
+                   SELECT position_id FROM position_notifications
+                   WHERE receiver_email = ?
+               )""",
+            (receiver_email,),
         )
         rows = [dict(row) for row in cursor.fetchall()]
         conn.close()
         return rows
 
-    def mark_notified(self, position_ids: list[int]):
-        """Mark positions as notified."""
+    def mark_notified(self, position_ids: list[int], receiver_email: str):
+        """Mark positions as notified to a specific receiver."""
         if not position_ids:
             return
         conn = self._get_conn()
         now = datetime.now().isoformat()
         conn.executemany(
-            "UPDATE positions SET notified_at = ? WHERE id = ?",
-            [(now, pid) for pid in position_ids],
+            """INSERT OR IGNORE INTO position_notifications
+               (position_id, receiver_email, notified_at)
+               VALUES (?, ?, ?)""",
+            [(pid, receiver_email, now) for pid in position_ids],
         )
         conn.commit()
         conn.close()

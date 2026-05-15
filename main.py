@@ -31,6 +31,7 @@ async def run():
     print("=" * 50)
 
     db = Database(config.DB_PATH)
+    db.migrate_notified_positions(config.RECEIVER_EMAIL)
     today = date.today()
 
     if not config.DEEPSEEK_API_KEY:
@@ -68,6 +69,7 @@ async def run():
 
             print("  LLM解析公告列表...")
             announcements = parse_list_page(llm, list_html, model=model)
+            announcements.sort(key=lambda x: x.get("date", ""), reverse=True)
             print(f"  解析到 {len(announcements)} 条公告")
 
             # Filter by date
@@ -205,8 +207,9 @@ async def run():
         await browser.close()
 
     # === 从 DB 查询未通知岗位 → 筛选 → 邮件 ===
-    print(f"\n[筛选] 从数据库查询未通知岗位...")
-    unnotified = db.get_unnotified_positions()
+    receiver = config.RECEIVER_EMAIL
+    print(f"\n[筛选] 从数据库查询未通知岗位（收件人: {receiver}）...")
+    unnotified = db.get_unnotified_positions(receiver)
     print(f"  未通知岗位: {len(unnotified)} 个")
 
     print(f"  筛选匹配岗位...")
@@ -218,14 +221,14 @@ async def run():
     subject = format_email_subject(today, len(matched))
     body = format_email_body(matched, today)
 
-    if config.SENDER_EMAIL and config.SENDER_PASSWORD and config.RECEIVER_EMAIL:
+    if config.SENDER_EMAIL and config.SENDER_PASSWORD and receiver:
         send_email(
             {
                 "smtp_host": config.SMTP_HOST,
                 "smtp_port": config.SMTP_PORT,
                 "sender_email": config.SENDER_EMAIL,
                 "sender_password": config.SENDER_PASSWORD,
-                "receiver_email": config.RECEIVER_EMAIL,
+                "receiver_email": receiver,
             },
             subject,
             body,
@@ -237,7 +240,7 @@ async def run():
 
     # 标记已通知
     if matched:
-        db.mark_notified([pos["id"] for pos in matched])
+        db.mark_notified([pos["id"] for pos in matched], receiver)
 
     print("\n" + "=" * 50)
     print("运行完成")
