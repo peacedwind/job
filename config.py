@@ -1,5 +1,8 @@
 from datetime import date
 
+# === 公告时效 ===
+MAX_ANNOUNCEMENT_DAYS = 30  # 只处理最近N天内发布的公告
+
 # === 筛选条件 ===
 BIRTH_DATE = date(1992, 11, 24)
 EDUCATION = "本科及以上"

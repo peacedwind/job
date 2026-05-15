@@ -1,5 +1,5 @@
 import asyncio
-from datetime import date
+from datetime import date, timedelta
 
 from playwright.async_api import async_playwright
 
@@ -64,6 +64,16 @@ async def run():
             print("  LLM解析公告列表...")
             announcements = parse_list_page(llm, list_html, model=model)
             print(f"  解析到 {len(announcements)} 条公告")
+
+            # Filter by date
+            if config.MAX_ANNOUNCEMENT_DAYS > 0:
+                cutoff = today - timedelta(days=config.MAX_ANNOUNCEMENT_DAYS)
+                original_count = len(announcements)
+                announcements = [
+                    ann for ann in announcements
+                    if _is_recent(ann.get("date", ""), cutoff)
+                ]
+                print(f"  过滤后保留 {len(announcements)} 条（{config.MAX_ANNOUNCEMENT_DAYS}天内）")
 
             # === 第2层: 详情页 ===
             for i, ann in enumerate(announcements[:20]):
@@ -213,6 +223,31 @@ def _attach_metadata(positions: list[dict], decision: dict):
         pos.setdefault("source_name", decision.get("source_name", "深圳考试院"))
         pos.setdefault("position_type", decision.get("position_type", "事业单位"))
         pos.setdefault("has_establishment", decision.get("has_establishment", True))
+
+
+def _is_recent(date_str: str, cutoff: date) -> bool:
+    """Check if a date string is within the cutoff range.
+    Accepts formats: YYYY-MM-DD, YYYY/MM/DD, YYYY年M月D日.
+    Returns True if date is missing/unparseable (be permissive).
+    """
+    if not date_str:
+        return True
+    try:
+        # Try YYYY-MM-DD
+        d = date.fromisoformat(date_str.strip())
+        return d >= cutoff
+    except ValueError:
+        pass
+    try:
+        # Try YYYY/MM/DD
+        parts = date_str.strip().replace("/", "-").split("-")
+        if len(parts) == 3:
+            d = date(int(parts[0]), int(parts[1]), int(parts[2]))
+            return d >= cutoff
+    except (ValueError, IndexError):
+        pass
+    # Can't parse - be permissive
+    return True
 
 
 if __name__ == "__main__":
