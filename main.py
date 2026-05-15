@@ -40,112 +40,124 @@ async def run():
         page = await browser.new_page()
         await page.set_extra_http_headers({"Accept-Language": "zh-CN,zh;q=0.9"})
 
-        # === 第1层: 列表页 ===
-        print("\n[1/5] 采集公告列表...")
-        print(f"  访问: {config.SHENZHEN_LIST_URL}")
-        await page.goto(config.SHENZHEN_LIST_URL, wait_until="domcontentloaded", timeout=30000)
-        await page.wait_for_timeout(2000)
-        list_html = await page.content()
-
-        print("  LLM解析公告列表...")
-        announcements = parse_list_page(llm, list_html, model=model)
-        print(f"  解析到 {len(announcements)} 条公告")
-
-        # === 第2层: 详情页 ===
-        print(f"\n[2/5] 分析详情页...")
         all_positions = []
-        for i, ann in enumerate(announcements[:20]):
-            title = ann.get("title", "")[:40]
-            url = ann.get("url", "")
-            if not url:
-                continue
-            print(f"\n  [{i+1}/{min(len(announcements), 20)}] {title}")
 
-            # Fetch detail page
+        for source in config.DATA_SOURCES:
+            source_name = source["name"]
+            list_url = source["list_url"]
+
+            # === 第1层: 列表页 ===
+            print(f"\n{'='*40}")
+            print(f"[数据源] {source_name}")
+            print(f"  URL: {list_url}")
+            print(f"{'='*40}")
+
             try:
-                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                await page.wait_for_timeout(1000)
-                html = await page.content()
+                await page.goto(list_url, wait_until="domcontentloaded", timeout=30000)
+                await page.wait_for_timeout(2000)
+                list_html = await page.content()
             except Exception as e:
-                print(f"    采集失败: {e}")
+                print(f"  列表页采集失败: {e}")
+                db.log_crawl(source_name, "failed", error_message=str(e))
                 continue
 
-            # LLM analyzes and decides action
-            decision = analyze_detail_page(llm, html, url, model=model)
-            action = decision.get("action", "skip")
-            reason = decision.get("reason", "")
-            print(f"    决策: {action} - {reason}")
+            print("  LLM解析公告列表...")
+            announcements = parse_list_page(llm, list_html, model=model)
+            print(f"  解析到 {len(announcements)} 条公告")
 
-            if action == "extract":
-                # 直接提取岗位
-                positions = decision.get("positions", [])
-                print(f"    → 提取到 {len(positions)} 个岗位")
-                _attach_metadata(positions, decision)
-                all_positions.extend(positions)
+            # === 第2层: 详情页 ===
+            for i, ann in enumerate(announcements[:20]):
+                title = ann.get("title", "")[:40]
+                url = ann.get("url", "")
+                if not url:
+                    continue
+                print(f"\n  [{i+1}/{min(len(announcements), 20)}] {title}")
 
-            elif action == "download":
-                # === 第3层: 下载附件 ===
-                attachments = decision.get("attachments", [])
-                for att in attachments:
-                    att_url = att.get("url", "")
-                    att_type = att.get("type", "unknown")
-                    print(f"    下载附件: {att_type} {att_url[:60]}...")
-                    text = await process_attachment(att_url)
-                    if text:
-                        print(f"    附件文本: {len(text)} 字符")
-                        att_result = parse_attachment_text(llm, text, att_url, model=model)
-                        positions = att_result.get("positions", [])
-                        print(f"    → 附件解析出 {len(positions)} 个岗位")
-                        _attach_metadata(positions, decision)
-                        all_positions.extend(positions)
-                    else:
-                        print(f"    附件下载/解析失败")
+                # Fetch detail page
+                try:
+                    await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                    await page.wait_for_timeout(1000)
+                    html = await page.content()
+                except Exception as e:
+                    print(f"    采集失败: {e}")
+                    continue
 
-            elif action == "follow":
-                # === 第3层: 跟踪链接 ===
-                links = decision.get("links", [])
-                for link in links[:3]:  # Max 3 links per page
-                    link_url = link.get("url", "")
-                    print(f"    跟踪链接: {link_url[:60]}...")
-                    try:
-                        await page.goto(link_url, wait_until="domcontentloaded", timeout=30000)
-                        await page.wait_for_timeout(1000)
-                        link_html = await page.content()
+                # LLM analyzes and decides action
+                decision = analyze_detail_page(llm, html, url, model=model)
+                action = decision.get("action", "skip")
+                reason = decision.get("reason", "")
+                # Override source_name from config
+                decision["source_name"] = source_name
+                print(f"    决策: {action} - {reason}")
 
-                        # Recursively analyze the linked page
-                        link_decision = analyze_detail_page(llm, link_html, link_url, model=model)
-                        link_action = link_decision.get("action", "skip")
-                        print(f"    链接页决策: {link_action}")
+                if action == "extract":
+                    positions = decision.get("positions", [])
+                    print(f"    → 提取到 {len(positions)} 个岗位")
+                    _attach_metadata(positions, decision)
+                    all_positions.extend(positions)
 
-                        if link_action == "extract":
-                            positions = link_decision.get("positions", [])
-                            print(f"    → 链接页提取到 {len(positions)} 个岗位")
-                            _attach_metadata(positions, link_decision)
+                elif action == "download":
+                    attachments = decision.get("attachments", [])
+                    for att in attachments:
+                        att_url = att.get("url", "")
+                        att_type = att.get("type", "unknown")
+                        print(f"    下载附件: {att_type} {att_url[:60]}...")
+                        text = await process_attachment(att_url)
+                        if text:
+                            print(f"    附件文本: {len(text)} 字符")
+                            att_result = parse_attachment_text(llm, text, att_url, model=model)
+                            positions = att_result.get("positions", [])
+                            print(f"    → 附件解析出 {len(positions)} 个岗位")
+                            _attach_metadata(positions, decision)
                             all_positions.extend(positions)
-                        elif link_action == "download":
-                            for att in link_decision.get("attachments", []):
-                                att_url = att.get("url", "")
-                                print(f"    下载链接页附件: {att_url[:60]}...")
-                                text = await process_attachment(att_url)
-                                if text:
-                                    att_result = parse_attachment_text(llm, text, att_url, model=model)
-                                    positions = att_result.get("positions", [])
-                                    print(f"    → 附件解析出 {len(positions)} 个岗位")
-                                    _attach_metadata(positions, link_decision)
-                                    all_positions.extend(positions)
-                    except Exception as e:
-                        print(f"    链接采集失败: {e}")
+                        else:
+                            print(f"    附件下载/解析失败")
 
-            elif action == "skip":
-                print(f"    跳过")
+                elif action == "follow":
+                    links = decision.get("links", [])
+                    for link in links[:3]:
+                        link_url = link.get("url", "")
+                        print(f"    跟踪链接: {link_url[:60]}...")
+                        try:
+                            await page.goto(link_url, wait_until="domcontentloaded", timeout=30000)
+                            await page.wait_for_timeout(1000)
+                            link_html = await page.content()
+
+                            link_decision = analyze_detail_page(llm, link_html, link_url, model=model)
+                            link_decision["source_name"] = source_name
+                            link_action = link_decision.get("action", "skip")
+                            print(f"    链接页决策: {link_action}")
+
+                            if link_action == "extract":
+                                positions = link_decision.get("positions", [])
+                                print(f"    → 链接页提取到 {len(positions)} 个岗位")
+                                _attach_metadata(positions, link_decision)
+                                all_positions.extend(positions)
+                            elif link_action == "download":
+                                for att in link_decision.get("attachments", []):
+                                    att_url = att.get("url", "")
+                                    print(f"    下载链接页附件: {att_url[:60]}...")
+                                    text = await process_attachment(att_url)
+                                    if text:
+                                        att_result = parse_attachment_text(llm, text, att_url, model=model)
+                                        positions = att_result.get("positions", [])
+                                        print(f"    → 附件解析出 {len(positions)} 个岗位")
+                                        _attach_metadata(positions, link_decision)
+                                        all_positions.extend(positions)
+                        except Exception as e:
+                            print(f"    链接采集失败: {e}")
+
+                elif action == "skip":
+                    print(f"    跳过")
+
+            db.log_crawl(source_name, "success", len(announcements))
 
         await browser.close()
 
-    db.log_crawl("深圳考试院", "success", len(announcements))
-    print(f"\n  共解析出 {len(all_positions)} 个岗位")
+    print(f"\n共解析出 {len(all_positions)} 个岗位")
 
     # === 筛选 ===
-    print(f"\n[3/5] 筛选匹配岗位...")
+    print(f"\n[筛选] 匹配岗位...")
     matched = filter_positions(all_positions, today, config.BIRTH_DATE)
     print(f"  匹配 {len(matched)} 个岗位")
 
@@ -159,7 +171,7 @@ async def run():
     print(f"  新增 {len(new_positions)} 个岗位")
 
     # === 邮件通知 ===
-    print(f"\n[4/5] 发送邮件通知...")
+    print(f"\n[通知] 发送邮件...")
     subject = format_email_subject(today, len(new_positions))
     body = format_email_body(new_positions, today)
 

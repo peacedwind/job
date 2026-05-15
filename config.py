@@ -15,13 +15,21 @@ SENDER_PASSWORD = "tvfmbpozvqwabcii"    # 待填: QQ邮箱授权码
 RECEIVER_EMAIL = "2035255649@qq.com"     # 待填: 收件邮箱
 
 # === 数据源 ===
-SHENZHEN_LIST_URL = "https://hrss.sz.gov.cn/szksy/zwgk/tzgg/index.html"
-SHENZHEN_DETAIL_PREFIX = "https://hrss.sz.gov.cn/szksy/zwgk/tzgg/content/"
+DATA_SOURCES = [
+    {
+        "name": "深圳考试院",
+        "list_url": "https://hrss.sz.gov.cn/szksy/zwgk/tzgg/index.html",
+    },
+    {
+        "name": "深圳人社局-公职招考",
+        "list_url": "https://hrss.sz.gov.cn/gzryzk/index.html",
+    },
+]
 
 # === 数据库 ===
 DB_PATH = "recruitment.db"
 
 # === LLM 配置 (DeepSeek) ===
-DEEPSEEK_API_KEY = ""       # 待填: 你的 DeepSeek API Key
+DEEPSEEK_API_KEY = "sk-1e74d43663fc4069a63974e90011a118"       # 待填: 你的 DeepSeek API Key
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-DEEPSEEK_MODEL = "deepseek-chat"
+DEEPSEEK_MODEL = "deepseek-v4-flash"
