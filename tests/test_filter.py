@@ -134,3 +134,35 @@ def test_hash_different_for_different_positions():
     pos1 = {"source_url": "https://a.com", "title": "技术岗", "org": "XX局"}
     pos2 = {"source_url": "https://b.com", "title": "管理岗", "org": "YY局"}
     assert compute_position_hash(pos1) != compute_position_hash(pos2)
+
+
+def test_education_bachelor_synonym(sample_position):
+    """学士 should be accepted (same as 本科)."""
+    sample_position["education"] = "学士学位"
+    today = date(2026, 5, 13)
+    result = filter_positions([sample_position], today, date(1992, 11, 24))
+    assert len(result) == 1
+
+
+def test_education_research_student(sample_position):
+    """研究生 should be rejected (rank > 本科)."""
+    sample_position["education"] = "研究生"
+    today = date(2026, 5, 13)
+    result = filter_positions([sample_position], today, date(1992, 11, 24))
+    assert len(result) == 0
+
+
+def test_education_master_research_student(sample_position):
+    """硕士研究生 should be rejected."""
+    sample_position["education"] = "硕士研究生"
+    today = date(2026, 5, 13)
+    result = filter_positions([sample_position], today, date(1992, 11, 24))
+    assert len(result) == 0
+
+
+def test_education_university(sample_position):
+    """大学 should be accepted (same as 本科)."""
+    sample_position["education"] = "大学本科"
+    today = date(2026, 5, 13)
+    result = filter_positions([sample_position], today, date(1992, 11, 24))
+    assert len(result) == 1
