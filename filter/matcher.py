@@ -97,7 +97,7 @@ def _calculate_age(birth_date: date, today: date) -> int:
 
 
 def _check_establishment(pos: dict) -> bool:
-    return pos.get("has_establishment", False) is True
+    return bool(pos.get("has_establishment", False))
 
 
 def _check_city(pos: dict, target_cities: list[str]) -> bool:
@@ -115,19 +115,25 @@ def _check_city(pos: dict, target_cities: list[str]) -> bool:
 def _check_education(pos: dict) -> bool:
     """Position education requirement must be <= target."""
     target_rank = _get_target_education_rank()
+    # Use pre-computed education_level from DB if available
+    pos_level = pos.get("education_level")
+    if pos_level is not None:
+        return int(pos_level) <= target_rank
+    # Fallback to text matching
     edu = pos.get("education", "")
     for keyword, rank in EDUCATION_RANK.items():
         if keyword in edu:
             return rank <= target_rank
-    # If we can't determine, be permissive
     return True
 
 
 def _check_major(pos: dict) -> bool:
     """Position major must contain at least one target keyword."""
     major = pos.get("major", "")
-    if not major:
-        return True  # No major requirement = any major OK
+    # 无专业要求的情况：空、无、无限制、不限等
+    major = major.strip()
+    if not major or major in ("无", "无限制", "不限", "—", "-", "/"):
+        return True
     keywords = _get_major_keywords()
     return any(kw in major for kw in keywords)
 

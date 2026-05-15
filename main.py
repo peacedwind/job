@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 from datetime import date, timedelta
 
 from playwright.async_api import async_playwright
@@ -18,6 +19,10 @@ from notifier.email_sender import (
     format_email_body,
     send_email,
 )
+
+
+def _url_hash(url: str) -> str:
+    return hashlib.md5(url.encode()).hexdigest()
 
 
 async def run():
@@ -40,13 +45,12 @@ async def run():
         page = await browser.new_page()
         await page.set_extra_http_headers({"Accept-Language": "zh-CN,zh;q=0.9"})
 
-        all_positions = []
-
         for source in config.DATA_SOURCES:
             source_name = source["name"]
             list_url = source["list_url"]
+            new_count = 0
+            skipped = 0
 
-            # === 第1层: 列表页 ===
             print(f"\n{'='*40}")
             print(f"[数据源] {source_name}")
             print(f"  URL: {list_url}")
@@ -59,6 +63,7 @@ async def run():
             except Exception as e:
                 print(f"  列表页采集失败: {e}")
                 db.log_crawl(source_name, "failed", error_message=str(e))
+                db.update_source_state(source_name, success=False)
                 continue
 
             print("  LLM解析公告列表...")
@@ -68,19 +73,27 @@ async def run():
             # Filter by date
             if config.MAX_ANNOUNCEMENT_DAYS > 0:
                 cutoff = today - timedelta(days=config.MAX_ANNOUNCEMENT_DAYS)
-                original_count = len(announcements)
                 announcements = [
                     ann for ann in announcements
                     if _is_recent(ann.get("date", ""), cutoff)
                 ]
                 print(f"  过滤后保留 {len(announcements)} 条（{config.MAX_ANNOUNCEMENT_DAYS}天内）")
 
-            # === 第2层: 详情页 ===
+            # === 增量处理：逐个公告，遇到已见过的就 break ===
             for i, ann in enumerate(announcements[:20]):
                 title = ann.get("title", "")[:40]
                 url = ann.get("url", "")
                 if not url:
                     continue
+
+                url_hash_val = _url_hash(url)
+
+                # 检查是否已处理过
+                if db.announcement_seen(url_hash_val):
+                    print(f"  [{i+1}] 已见过: {title}，停止该数据源")
+                    skipped = len(announcements[:20]) - i
+                    break
+
                 print(f"\n  [{i+1}/{min(len(announcements), 20)}] {title}")
 
                 # Fetch detail page
@@ -96,34 +109,40 @@ async def run():
                 decision = analyze_detail_page(llm, html, url, model=model)
                 action = decision.get("action", "skip")
                 reason = decision.get("reason", "")
-                # Override source_name from config
                 decision["source_name"] = source_name
                 print(f"    决策: {action} - {reason}")
 
+                has_positions = False
+
                 if action == "extract":
                     positions = decision.get("positions", [])
-                    print(f"    → 提取到 {len(positions)} 个岗位")
-                    _attach_metadata(positions, decision)
-                    all_positions.extend(positions)
+                    if positions:
+                        has_positions = True
+                        print(f"    → 提取到 {len(positions)} 个岗位")
+                        _attach_metadata(positions, decision)
+                        _store_positions(db, positions, url_hash_val, source_name)
+                        new_count += len(positions)
 
                 elif action == "download":
                     attachments = decision.get("attachments", [])
                     for att in attachments:
                         att_url = att.get("url", "")
-                        att_type = att.get("type", "unknown")
                         att_context = att.get("context", "")
                         if not should_download(att_url, att_context):
                             print(f"    跳过附件(不相关): {att_url.split('/')[-1][:40]}")
                             continue
-                        print(f"    下载附件: {att_type} {att_url[:60]}...")
+                        print(f"    下载附件: {att_url[:60]}...")
                         text = await process_attachment(att_url, page=page)
                         if text:
                             print(f"    附件文本: {len(text)} 字符")
                             att_result = parse_attachment_text(llm, text, att_url, model=model)
                             positions = att_result.get("positions", [])
-                            print(f"    → 附件解析出 {len(positions)} 个岗位")
-                            _attach_metadata(positions, decision)
-                            all_positions.extend(positions)
+                            if positions:
+                                has_positions = True
+                                print(f"    → 附件解析出 {len(positions)} 个岗位")
+                                _attach_metadata(positions, decision)
+                                _store_positions(db, positions, url_hash_val, source_name)
+                                new_count += len(positions)
                         else:
                             print(f"    附件下载/解析失败")
 
@@ -144,9 +163,12 @@ async def run():
 
                             if link_action == "extract":
                                 positions = link_decision.get("positions", [])
-                                print(f"    → 链接页提取到 {len(positions)} 个岗位")
-                                _attach_metadata(positions, link_decision)
-                                all_positions.extend(positions)
+                                if positions:
+                                    has_positions = True
+                                    print(f"    → 链接页提取到 {len(positions)} 个岗位")
+                                    _attach_metadata(positions, link_decision)
+                                    _store_positions(db, positions, url_hash_val, source_name)
+                                    new_count += len(positions)
                             elif link_action == "download":
                                 for att in link_decision.get("attachments", []):
                                     att_url = att.get("url", "")
@@ -159,39 +181,42 @@ async def run():
                                     if text:
                                         att_result = parse_attachment_text(llm, text, att_url, model=model)
                                         positions = att_result.get("positions", [])
-                                        print(f"    → 附件解析出 {len(positions)} 个岗位")
-                                        _attach_metadata(positions, link_decision)
-                                        all_positions.extend(positions)
+                                        if positions:
+                                            has_positions = True
+                                            print(f"    → 附件解析出 {len(positions)} 个岗位")
+                                            _attach_metadata(positions, link_decision)
+                                            _store_positions(db, positions, url_hash_val, source_name)
+                                            new_count += len(positions)
                         except Exception as e:
                             print(f"    链接采集失败: {e}")
 
                 elif action == "skip":
                     print(f"    跳过")
 
-            db.log_crawl(source_name, "success", len(announcements))
+                # 无论有无岗位，都标记为已见过
+                db.mark_announcement_seen(url_hash_val, source_name, title, has_positions)
+
+            if skipped > 0:
+                print(f"  跳过 {skipped} 条已见过的公告")
+
+            db.log_crawl(source_name, "success", new_count)
+            db.update_source_state(source_name, success=True)
 
         await browser.close()
 
-    print(f"\n共解析出 {len(all_positions)} 个岗位")
+    # === 从 DB 查询未通知岗位 → 筛选 → 邮件 ===
+    print(f"\n[筛选] 从数据库查询未通知岗位...")
+    unnotified = db.get_unnotified_positions()
+    print(f"  未通知岗位: {len(unnotified)} 个")
 
-    # === 筛选 ===
-    print(f"\n[筛选] 匹配岗位...")
-    matched = filter_positions(all_positions, today, config.BIRTH_DATE)
+    print(f"  筛选匹配岗位...")
+    matched = filter_positions(unnotified, today, config.BIRTH_DATE)
     print(f"  匹配 {len(matched)} 个岗位")
-
-    # === 去重存储 ===
-    new_positions = []
-    for pos in matched:
-        pos["hash"] = compute_position_hash(pos)
-        if not db.hash_exists(pos["hash"]):
-            db.insert_position(pos)
-            new_positions.append(pos)
-    print(f"  新增 {len(new_positions)} 个岗位")
 
     # === 邮件通知 ===
     print(f"\n[通知] 发送邮件...")
-    subject = format_email_subject(today, len(new_positions))
-    body = format_email_body(new_positions, today)
+    subject = format_email_subject(today, len(matched))
+    body = format_email_body(matched, today)
 
     if config.SENDER_EMAIL and config.SENDER_PASSWORD and config.RECEIVER_EMAIL:
         send_email(
@@ -210,9 +235,23 @@ async def run():
         print(f"\n主题: {subject}")
         print(body)
 
+    # 标记已通知
+    if matched:
+        db.mark_notified([pos["id"] for pos in matched])
+
     print("\n" + "=" * 50)
     print("运行完成")
     print("=" * 50)
+
+
+def _store_positions(db: Database, positions: list[dict],
+                      url_hash_val: str, source_name: str):
+    """Store positions to DB immediately."""
+    for pos in positions:
+        pos["hash"] = compute_position_hash(pos)
+        pos["url_hash"] = url_hash_val
+        pos.setdefault("source_name", source_name)
+        db.insert_position(pos)
 
 
 def _attach_metadata(positions: list[dict], decision: dict):
@@ -233,20 +272,17 @@ def _is_recent(date_str: str, cutoff: date) -> bool:
     if not date_str:
         return True
     try:
-        # Try YYYY-MM-DD
         d = date.fromisoformat(date_str.strip())
         return d >= cutoff
     except ValueError:
         pass
     try:
-        # Try YYYY/MM/DD
         parts = date_str.strip().replace("/", "-").split("-")
         if len(parts) == 3:
             d = date(int(parts[0]), int(parts[1]), int(parts[2]))
             return d >= cutoff
     except (ValueError, IndexError):
         pass
-    # Can't parse - be permissive
     return True
 
 

@@ -173,8 +173,58 @@ def analyze_detail_page(client: OpenAI, html: str, url: str,
 def parse_attachment_text(client: OpenAI, text: str, source_url: str,
                            model: str = "deepseek-chat") -> dict:
     """Parse text extracted from PDF/Excel attachment.
+    For large texts, splits into batches and merges results.
     Returns structured position data.
     """
+    CHUNK_SIZE = 4000
+
+    if len(text) <= CHUNK_SIZE:
+        return _parse_attachment_chunk(client, text, source_url, model)
+
+    # Split by lines, keep header for each chunk
+    lines = text.split("\n")
+    header_lines = []
+    data_start = 0
+    for i, line in enumerate(lines):
+        if "|" in line and any(kw in line for kw in ["单位", "岗位", "学历", "专业", "人数", "招聘"]):
+            header_lines.append(line)
+        elif header_lines:
+            data_start = i
+            break
+    if not header_lines:
+        header_lines = lines[:3]
+        data_start = 3
+
+    header = "\n".join(header_lines)
+    all_positions = []
+    batch_count = 0
+    chunk_lines = []
+    chunk_len = 0
+
+    for line in lines[data_start:]:
+        if chunk_len + len(line) > CHUNK_SIZE and chunk_lines:
+            batch_text = header + "\n" + "\n".join(chunk_lines)
+            result = _parse_attachment_chunk(client, batch_text, source_url, model)
+            all_positions.extend(result.get("positions", []))
+            batch_count += 1
+            chunk_lines = []
+            chunk_len = 0
+        chunk_lines.append(line)
+        chunk_len += len(line) + 1
+
+    if chunk_lines:
+        batch_text = header + "\n" + "\n".join(chunk_lines)
+        result = _parse_attachment_chunk(client, batch_text, source_url, model)
+        all_positions.extend(result.get("positions", []))
+        batch_count += 1
+
+    print(f"    分 {batch_count} 批解析，共 {len(all_positions)} 个岗位")
+    return {"positions": all_positions}
+
+
+def _parse_attachment_chunk(client: OpenAI, text: str, source_url: str,
+                             model: str = "deepseek-chat") -> dict:
+    """Parse a single chunk of attachment text."""
     prompt = """从以下文本中提取招考岗位信息。这些文本是从PDF或Excel附件中提取的。
 
 提取每个岗位的：
@@ -213,7 +263,7 @@ def parse_attachment_text(client: OpenAI, text: str, source_url: str,
             model=model,
             messages=[
                 {"role": "system", "content": "你是数据提取助手。只返回JSON，不要其他文字。"},
-                {"role": "user", "content": f"{prompt}\n\n文本内容:\n{text[:20000]}"},
+                {"role": "user", "content": f"{prompt}\n\n文本内容:\n{text}"},
             ],
             temperature=0,
             max_tokens=6000,
