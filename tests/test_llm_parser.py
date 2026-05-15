@@ -7,7 +7,6 @@ def test_json_extraction_from_markdown():
     content = '''```json
 [{"title": "test", "date": "2026-05-10", "url": "https://example.com"}]
 ```'''
-    # Simulate the extraction logic from llm_parser
     if "```" in content:
         content = content.split("```")[1]
         if content.startswith("json"):
@@ -25,10 +24,12 @@ def test_json_extraction_plain():
     assert result[0]["title"] == "test"
 
 
-def test_json_extraction_detail_format():
-    """Should parse detail page JSON format."""
+def test_json_extraction_extract_action():
+    """Should parse extract action format."""
     content = '''```json
 {
+  "action": "extract",
+  "reason": "页面包含岗位表格",
   "title": "2026年深圳市XX局招录公告",
   "position_type": "公务员",
   "has_establishment": true,
@@ -54,6 +55,43 @@ def test_json_extraction_detail_format():
             content = content[4:]
         content = content.strip()
     result = json.loads(content)
-    assert result["title"] == "2026年深圳市XX局招录公告"
+    assert result["action"] == "extract"
     assert len(result["positions"]) == 1
-    assert result["positions"][0]["org"] == "深圳市XX局"
+
+
+def test_json_extraction_download_action():
+    """Should parse download action format."""
+    content = '''```json
+{
+  "action": "download",
+  "reason": "岗位表在附件中",
+  "title": "测试公告",
+  "attachments": [
+    {"url": "https://example.com/pos.pdf", "type": "pdf"}
+  ]
+}
+```'''
+    if "```" in content:
+        content = content.split("```")[1]
+        if content.startswith("json"):
+            content = content[4:]
+        content = content.strip()
+    result = json.loads(content)
+    assert result["action"] == "download"
+    assert len(result["attachments"]) == 1
+    assert result["attachments"][0]["type"] == "pdf"
+
+
+def test_json_extraction_follow_action():
+    """Should parse follow action format."""
+    content = '{"action": "follow", "links": [{"url": "https://example.com/detail"}]}'
+    result = json.loads(content)
+    assert result["action"] == "follow"
+    assert result["links"][0]["url"] == "https://example.com/detail"
+
+
+def test_json_extraction_skip_action():
+    """Should parse skip action format."""
+    content = '{"action": "skip", "reason": "无关页面"}'
+    result = json.loads(content)
+    assert result["action"] == "skip"
