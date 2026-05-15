@@ -116,7 +116,7 @@ async def run():
                             print(f"    跳过附件(不相关): {att_url.split('/')[-1][:40]}")
                             continue
                         print(f"    下载附件: {att_type} {att_url[:60]}...")
-                        text = await process_attachment(att_url)
+                        text = await process_attachment(att_url, page=page)
                         if text:
                             print(f"    附件文本: {len(text)} 字符")
                             att_result = parse_attachment_text(llm, text, att_url, model=model)
@@ -155,7 +155,7 @@ async def run():
                                         print(f"    跳过附件(不相关): {att_url.split('/')[-1][:40]}")
                                         continue
                                     print(f"    下载链接页附件: {att_url[:60]}...")
-                                    text = await process_attachment(att_url)
+                                    text = await process_attachment(att_url, page=page)
                                     if text:
                                         att_result = parse_attachment_text(llm, text, att_url, model=model)
                                         positions = att_result.get("positions", [])

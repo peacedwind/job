@@ -1,4 +1,5 @@
 import io
+import subprocess
 import tempfile
 import os
 from pathlib import Path
@@ -6,10 +7,26 @@ from pathlib import Path
 import httpx
 import pdfplumber
 import openpyxl
+import xlrd
 
 
-async def download_file(url: str) -> bytes | None:
-    """Download a file from URL. Returns bytes or None on failure."""
+async def download_file(url: str, page=None) -> bytes | None:
+    """Download a file from URL.
+    Uses curl (handles gov site SSL issues), falls back to httpx.
+    """
+    # Try curl first (better SSL handling for gov sites)
+    try:
+        result = subprocess.run(
+            ["curl", "-sSL", "-k", "--max-time", "60", "-o", "-", url],
+            capture_output=True,
+            timeout=70,
+        )
+        if result.returncode == 0 and len(result.stdout) > 100:
+            return result.stdout
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    # Fallback to httpx
     try:
         async with httpx.AsyncClient(verify=False, follow_redirects=True, timeout=60) as client:
             resp = await client.get(url)
@@ -42,15 +59,16 @@ def extract_text_from_pdf(content: bytes) -> str:
 
 
 def extract_text_from_excel(content: bytes) -> str:
-    """Extract text from Excel bytes using openpyxl."""
+    """Extract text from Excel bytes. Supports both .xlsx (openpyxl) and .xls (xlrd)."""
+    # Try .xlsx first (openpyxl)
     try:
         text_parts = []
         wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-        for sheet_name in wb.sheetnames[:5]:  # Limit to first 5 sheets
+        for sheet_name in wb.sheetnames[:5]:
             ws = wb[sheet_name]
             text_parts.append(f"=== Sheet: {sheet_name} ===")
             row_count = 0
-            for row in ws.iter_rows(max_row=200, values_only=True):  # Limit rows
+            for row in ws.iter_rows(max_row=200, values_only=True):
                 cells = [str(cell) if cell is not None else "" for cell in row]
                 if any(cells):
                     text_parts.append(" | ".join(cells))
@@ -58,6 +76,24 @@ def extract_text_from_excel(content: bytes) -> str:
             if row_count == 0:
                 text_parts.append("(空表)")
         wb.close()
+        return "\n".join(text_parts)
+    except Exception:
+        pass
+
+    # Fallback to .xls (xlrd)
+    try:
+        text_parts = []
+        wb = xlrd.open_workbook(file_contents=content)
+        for sheet in wb.sheets()[:5]:
+            text_parts.append(f"=== Sheet: {sheet.name} ===")
+            row_count = 0
+            for row_idx in range(min(sheet.nrows, 200)):
+                cells = [str(sheet.cell_value(row_idx, col_idx)) for col_idx in range(sheet.ncols)]
+                if any(cells):
+                    text_parts.append(" | ".join(cells))
+                    row_count += 1
+            if row_count == 0:
+                text_parts.append("(空表)")
         return "\n".join(text_parts)
     except Exception as e:
         print(f"Excel解析失败: {e}")
@@ -113,11 +149,11 @@ def should_download(url: str, context: str = "") -> bool:
     return False
 
 
-async def process_attachment(url: str) -> str:
+async def process_attachment(url: str, page=None) -> str:
     """Download and extract text from an attachment.
     Returns extracted text or empty string.
     """
-    content = await download_file(url)
+    content = await download_file(url, page=page)
     if not content:
         return ""
 
